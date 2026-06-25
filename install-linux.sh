@@ -27,7 +27,9 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 die() { log_error "$*"; exit 1; }
 
 SERVICE_NAME="model-monitor-lite"
-REPO_URL="${REPO_URL:-https://github.com/james-6-23/new_api_tools.git}"
+REPO_URL="${REPO_URL:-https://github.com/tohka0x01/model-monitor-lite.git}"
+IMAGE="${IMAGE:-ghcr.io/tohka0x01/model-monitor-lite:latest}"
+BUILD_LOCAL="${BUILD_LOCAL:-false}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/newapi-model-monitor-lite}"
 SERVER_PORT="${SERVER_PORT:-1145}"
 PUBLIC_TITLE="${PUBLIC_TITLE:-模型状态监控}"
@@ -153,6 +155,11 @@ prepare_work_dir() {
 }
 
 sync_project_files() {
+  if [[ "$BUILD_LOCAL" != "true" ]]; then
+    log_info "使用预构建镜像，跳过源码同步"
+    return 0
+  fi
+
   local source_dir=""
   source_dir="$(resolve_source_dir || true)"
 
@@ -186,15 +193,18 @@ sync_project_files() {
     git clone --depth=1 "$REPO_URL" "$repo_dir"
   fi
 
-  [[ -d "${repo_dir}/model-monitor-lite" ]] || die "仓库中未找到 model-monitor-lite 目录"
+  if [[ -d "${repo_dir}/model-monitor-lite" ]]; then
+    repo_dir="${repo_dir}/model-monitor-lite"
+  fi
+  [[ -f "${repo_dir}/go.mod" && -f "${repo_dir}/main.go" ]] || die "仓库中未找到 model-monitor-lite 源码"
   mkdir -p "$WORK_DIR/static"
-  cp "${repo_dir}/model-monitor-lite/go.mod" "$WORK_DIR/go.mod"
-  cp "${repo_dir}/model-monitor-lite/go.sum" "$WORK_DIR/go.sum"
-  cp "${repo_dir}/model-monitor-lite/main.go" "$WORK_DIR/main.go"
-  cp "${repo_dir}/model-monitor-lite/Dockerfile" "$WORK_DIR/Dockerfile"
-  cp "${repo_dir}/model-monitor-lite/static/embed.html" "$WORK_DIR/static/embed.html"
-  cp "${repo_dir}/model-monitor-lite/static/embed.js" "$WORK_DIR/static/embed.js"
-  cp "${repo_dir}/model-monitor-lite/static/style.css" "$WORK_DIR/static/style.css"
+  cp "${repo_dir}/go.mod" "$WORK_DIR/go.mod"
+  cp "${repo_dir}/go.sum" "$WORK_DIR/go.sum"
+  cp "${repo_dir}/main.go" "$WORK_DIR/main.go"
+  cp "${repo_dir}/Dockerfile" "$WORK_DIR/Dockerfile"
+  cp "${repo_dir}/static/embed.html" "$WORK_DIR/static/embed.html"
+  cp "${repo_dir}/static/embed.js" "$WORK_DIR/static/embed.js"
+  cp "${repo_dir}/static/style.css" "$WORK_DIR/static/style.css"
 }
 
 write_env_file() {
@@ -238,7 +248,8 @@ EOF
 
 write_compose_file() {
   local compose_file="${WORK_DIR}/docker-compose.yml"
-  cat > "$compose_file" <<EOF
+  if [[ "$BUILD_LOCAL" == "true" ]]; then
+    cat > "$compose_file" <<EOF
 services:
   ${SERVICE_NAME}:
     build: .
@@ -249,6 +260,19 @@ services:
       - "127.0.0.1:${SERVER_PORT}:${SERVER_PORT}"
     restart: unless-stopped
 EOF
+  else
+    cat > "$compose_file" <<EOF
+services:
+  ${SERVICE_NAME}:
+    image: ${IMAGE}
+    container_name: ${SERVICE_NAME}
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:${SERVER_PORT}:${SERVER_PORT}"
+    restart: unless-stopped
+EOF
+  fi
   log_success "Docker Compose 文件已生成: $compose_file"
 }
 
@@ -269,16 +293,16 @@ connect_to_newapi_network() {
 
 start_service() {
   log_info "启动 ${SERVICE_NAME}..."
-  (cd "$WORK_DIR" && $DOCKER_COMPOSE --env-file .env up -d --build)
+  if [[ "$BUILD_LOCAL" == "true" ]]; then
+    (cd "$WORK_DIR" && $DOCKER_COMPOSE --env-file .env up -d --build)
+  else
+    (cd "$WORK_DIR" && $DOCKER_COMPOSE --env-file .env pull && $DOCKER_COMPOSE --env-file .env up -d)
+  fi
   connect_to_newapi_network
   log_success "服务已启动"
 }
 
 show_result() {
-  local server_ip=""
-  server_ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-  server_ip="${server_ip:-127.0.0.1}"
-
   echo ""
   echo -e "${GREEN}========================================${NC}"
   echo -e "${GREEN}  NewAPI Model Monitor Lite 安装完成${NC}"
@@ -286,10 +310,11 @@ show_result() {
   echo ""
   echo -e "安装目录: ${YELLOW}${WORK_DIR}${NC}"
   echo -e "容器名称: ${YELLOW}${SERVICE_NAME}${NC}"
-  echo -e "访问地址: ${BLUE}http://${server_ip}:${SERVER_PORT}${BASE_PATH}/embed${NC}"
+  echo -e "本机地址: ${BLUE}http://127.0.0.1:${SERVER_PORT}${BASE_PATH}/embed${NC}"
+  echo -e "反代提示: ${YELLOW}请通过 NewAPI / Nginx / Cloudflare Tunnel 暴露到你的域名后再嵌入${NC}"
   echo ""
   echo "NewAPI iframe 示例:"
-  echo "  <iframe src=\"http://${server_ip}:${SERVER_PORT}${BASE_PATH}/embed\" style=\"width:100%;height:720px;border:0;\" loading=\"lazy\"></iframe>"
+  echo "  <iframe src=\"/model-monitor/embed\" style=\"width:100%;height:720px;border:0;\" loading=\"lazy\"></iframe>"
   echo ""
   echo "常用命令:"
   echo "  cd ${WORK_DIR} && ${DOCKER_COMPOSE} ps"
@@ -351,6 +376,8 @@ install_service() {
   echo -e "服务端口: ${YELLOW}${SERVER_PORT}${NC}"
   echo -e "标题:     ${YELLOW}${PUBLIC_TITLE}${NC}"
   echo -e "Mock:     ${YELLOW}${MOCK_DATA}${NC}"
+  echo -e "镜像:     ${YELLOW}${IMAGE}${NC}"
+  echo -e "本地构建: ${YELLOW}${BUILD_LOCAL}${NC}"
   echo ""
   if ! confirm "继续安装/更新 ${SERVICE_NAME} ?" true; then
     log_info "已取消"
@@ -378,6 +405,8 @@ NewAPI Model Monitor Lite - Linux 一键安装脚本
 常用环境变量:
   INSTALL_DIR=/opt/newapi-model-monitor-lite
   SERVER_PORT=1145
+  IMAGE='ghcr.io/tohka0x01/model-monitor-lite:latest'
+  BUILD_LOCAL=false
   SQL_DSN='host=postgres port=5432 user=postgres password=xxx dbname=new-api sslmode=disable'
   LOG_SQL_DSN=''
   BASE_PATH=''

@@ -1,6 +1,6 @@
 services:
   model-monitor-lite:
-    build: .
+    image: ghcr.io/tohka0x01/model-monitor-lite:latest
     container_name: model-monitor-lite
     ports:
       - "127.0.0.1:1145:1145"
