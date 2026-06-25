@@ -6,6 +6,8 @@
 
 本项目参考并精简自 [`new_api_tools`](https://github.com/james-6-23/new_api_tools) 项目中的模型状态监控能力，只保留适合独立部署和 iframe 嵌入的核心链路。相比完整的 `new_api_tools`，本项目不包含用户管理、充值统计、风控、兑换码等后台功能。
 
+![模型状态监控嵌入效果](docs/images/model-monitor-embed.png)
+
 ## 目标
 
 - 旁路连接 NewAPI 数据库，不改 NewAPI 表结构。
