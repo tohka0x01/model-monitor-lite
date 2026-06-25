@@ -1,0 +1,20 @@
+services:
+  model-monitor-lite:
+    build: .
+    container_name: model-monitor-lite
+    ports:
+      - "127.0.0.1:1145:1145"
+    environment:
+      SQL_DSN: ${SQL_DSN}
+      LOG_SQL_DSN: ${LOG_SQL_DSN:-}
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 1145
+      BASE_PATH: ${BASE_PATH:-}
+      PUBLIC_TITLE: ${PUBLIC_TITLE:-模型状态监控}
+      DEFAULT_MODELS: ${DEFAULT_MODELS:-}
+      DEFAULT_WINDOW: ${DEFAULT_WINDOW:-24h}
+      REFRESH_SECONDS: ${REFRESH_SECONDS:-60}
+      MAX_MODELS: ${MAX_MODELS:-100}
+      STATUS_TIMEOUT_SECONDS: ${STATUS_TIMEOUT_SECONDS:-15}
+      MOCK_DATA: ${MOCK_DATA:-false}
+    restart: unless-stopped

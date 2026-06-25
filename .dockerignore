@@ -1,0 +1,6 @@
+.write-test
+main.go.*
+server.log
+server.err.log
+.git
+.gitignore

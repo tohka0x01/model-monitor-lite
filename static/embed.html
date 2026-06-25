@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>模型状态监控</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23111820'/%3E%3Cpath d='M16 41h32M16 32h32M16 23h32' stroke='%2316a34a' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="static/style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <div>
+          <h1 id="page-title">模型状态监控</h1>
+          <p id="subtitle">24小时 · 0 models</p>
+        </div>
+        <button id="refresh-button" class="refresh" type="button" aria-label="刷新">
+          <span class="clock" aria-hidden="true"></span>
+          <span id="countdown">--s</span>
+        </button>
+      </header>
+
+      <section id="models" class="models" aria-live="polite"></section>
+      <section id="empty" class="empty" hidden>暂无模型状态数据</section>
+
+      <footer class="legend" aria-label="状态图例">
+        <span><i class="dot good"></i>可用</span>
+        <span><i class="dot warn"></i>波动</span>
+        <span><i class="dot bad"></i>不可用</span>
+        <span><i class="dot none"></i>无请求</span>
+      </footer>
+      <div id="slot-tooltip" class="slot-tooltip" hidden></div>
+    </main>
+    <script src="static/embed.js" defer></script>
+  </body>
+</html>
