@@ -5,6 +5,8 @@ const state = {
   countdown: 60,
   timer: null,
   models: [],
+  retainedTokens: new Map(),
+  tokenHistoryError: '',
   timeWindow: '24h',
 }
 
@@ -60,14 +62,22 @@ async function refresh() {
     if (state.models.length === 0) {
       await loadModelList()
     }
-    const payload = await api('api/status', {
-      method: 'POST',
-      body: JSON.stringify({
-        models: state.models,
-        window: state.timeWindow,
+    const [statusResult, tokenResult] = await Promise.allSettled([
+      api('api/status', {
+        method: 'POST',
+        body: JSON.stringify({
+          models: state.models,
+          window: state.timeWindow,
+        }),
       }),
-    })
-    const data = payload.data || []
+      api('api/token-totals', {
+        method: 'POST',
+        body: JSON.stringify({ models: state.models }),
+      }),
+    ])
+    if (statusResult.status === 'rejected') throw statusResult.reason
+    applyTokenTotals(tokenResult)
+    const data = statusResult.value.data || []
     render(data)
     state.countdown = state.refreshSeconds
     renderCountdown()
@@ -84,6 +94,19 @@ function setBusy(busy) {
     els.countdown.textContent = '...'
   } else {
     renderCountdown()
+  }
+}
+
+function applyTokenTotals(result) {
+  state.retainedTokens = new Map()
+  state.tokenHistoryError = ''
+  if (result.status === 'rejected') {
+    state.tokenHistoryError = result.reason instanceof Error ? result.reason.message : String(result.reason)
+    return
+  }
+  for (const item of result.value.data || []) {
+    if (!item.model_name || !Number.isFinite(item.retained_tokens)) continue
+    state.retainedTokens.set(item.model_name, item.retained_tokens)
   }
 }
 
@@ -110,11 +133,21 @@ function renderRow(item) {
   row.className = 'model-row'
   const slots = Array.isArray(item.slot_data) ? item.slot_data : []
 
+  const modelName = item.model_name || ''
+  const retainedTokens = state.retainedTokens.get(modelName)
+  const retainedLabel = Number.isFinite(retainedTokens) ? formatTokens(retainedTokens) : '--'
+  const retainedTitle = state.tokenHistoryError
+    ? `日志累计 Token 加载失败：${state.tokenHistoryError}`
+    : `当前保留日志累计 Token ${formatNumber(retainedTokens || 0)}`
+
   row.innerHTML = `
     <div class="model-head">
       <div class="name-wrap">
-        <h3 class="model-name" title="${escapeHTML(item.model_name || '')}">${escapeHTML(item.model_name || '')}</h3>
-        <span class="model-token" title="总 Token ${escapeHTML(formatNumber(item.total_tokens || 0))}">Token ${escapeHTML(formatTokens(item.total_tokens))}</span>
+        <h3 class="model-name" title="${escapeHTML(modelName)}">${escapeHTML(modelName)}</h3>
+        <div class="token-wrap">
+          <span class="model-token" title="${escapeHTML(state.timeWindow)} Token ${escapeHTML(formatNumber(item.total_tokens || 0))}">${escapeHTML(state.timeWindow)} ${escapeHTML(formatTokens(item.total_tokens))}</span>
+          <span class="model-token retained-token" title="${escapeHTML(retainedTitle)}">累计 ${escapeHTML(retainedLabel)}</span>
+        </div>
       </div>
       <div class="metrics">
         <strong>${escapeHTML(String(item.success_rate ?? 100))}%</strong><span class="sep">·</span>${formatNumber(item.total_requests || 0)}

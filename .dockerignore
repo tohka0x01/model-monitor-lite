@@ -1,4 +1,5 @@
 .write-test
+/data/
 main.go.*
 server.log
 server.err.log

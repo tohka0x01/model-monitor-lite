@@ -8,6 +8,7 @@ set -euo pipefail
 #   bash install-linux.sh
 #   bash install-linux.sh --status
 #   bash install-linux.sh --logs
+#   bash install-linux.sh --update
 #   bash install-linux.sh --uninstall
 #
 # 说明:
@@ -37,6 +38,8 @@ DEFAULT_WINDOW="${DEFAULT_WINDOW:-24h}"
 REFRESH_SECONDS="${REFRESH_SECONDS:-60}"
 MAX_MODELS="${MAX_MODELS:-100}"
 STATUS_TIMEOUT_SECONDS="${STATUS_TIMEOUT_SECONDS:-15}"
+HISTORY_REFRESH_SECONDS="${HISTORY_REFRESH_SECONDS:-60}"
+HISTORY_TIMEOUT_SECONDS="${HISTORY_TIMEOUT_SECONDS:-300}"
 BASE_PATH="${BASE_PATH:-}"
 MOCK_DATA="${MOCK_DATA:-false}"
 
@@ -172,7 +175,7 @@ sync_project_files() {
     mkdir -p "$WORK_DIR/static"
     cp "$source_dir/go.mod" "$WORK_DIR/go.mod"
     cp "$source_dir/go.sum" "$WORK_DIR/go.sum"
-    cp "$source_dir/main.go" "$WORK_DIR/main.go"
+    cp "$source_dir"/*.go "$WORK_DIR/"
     cp "$source_dir/Dockerfile" "$WORK_DIR/Dockerfile"
     cp "$source_dir/static/embed.html" "$WORK_DIR/static/embed.html"
     cp "$source_dir/static/embed.js" "$WORK_DIR/static/embed.js"
@@ -200,7 +203,7 @@ sync_project_files() {
   mkdir -p "$WORK_DIR/static"
   cp "${repo_dir}/go.mod" "$WORK_DIR/go.mod"
   cp "${repo_dir}/go.sum" "$WORK_DIR/go.sum"
-  cp "${repo_dir}/main.go" "$WORK_DIR/main.go"
+  cp "${repo_dir}"/*.go "$WORK_DIR/"
   cp "${repo_dir}/Dockerfile" "$WORK_DIR/Dockerfile"
   cp "${repo_dir}/static/embed.html" "$WORK_DIR/static/embed.html"
   cp "${repo_dir}/static/embed.js" "$WORK_DIR/static/embed.js"
@@ -239,6 +242,9 @@ DEFAULT_WINDOW=${DEFAULT_WINDOW}
 REFRESH_SECONDS=${REFRESH_SECONDS}
 MAX_MODELS=${MAX_MODELS}
 STATUS_TIMEOUT_SECONDS=${STATUS_TIMEOUT_SECONDS}
+HISTORY_DATA_PATH=/data/model-monitor.db
+HISTORY_REFRESH_SECONDS=${HISTORY_REFRESH_SECONDS}
+HISTORY_TIMEOUT_SECONDS=${HISTORY_TIMEOUT_SECONDS}
 MOCK_DATA=${MOCK_DATA}
 EOF
 
@@ -276,6 +282,29 @@ EOF
   log_success "Docker Compose 文件已生成: $compose_file"
 }
 
+ensure_history_storage() {
+  mkdir -p "${WORK_DIR}/data"
+  cat > "${WORK_DIR}/docker-compose.override.yml" <<EOF
+services:
+  ${SERVICE_NAME}:
+    environment:
+      HISTORY_DATA_PATH: /data/model-monitor.db
+    volumes:
+      - ./data:/data
+EOF
+  log_success "历史统计目录已就绪: ${WORK_DIR}/data"
+}
+
+install_management_script() {
+  local source_script="${BASH_SOURCE[0]}"
+  local target_script="${WORK_DIR}/install-linux.sh"
+  [[ -f "$source_script" ]] || die "未找到安装脚本: $source_script"
+  if [[ "$(cd "$(dirname "$source_script")" && pwd)/$(basename "$source_script")" != "$target_script" ]]; then
+    cp "$source_script" "$target_script"
+  fi
+  chmod 755 "$target_script"
+}
+
 connect_to_newapi_network() {
   local container=""
   container="$(detect_newapi_container || true)"
@@ -302,6 +331,46 @@ start_service() {
   log_success "服务已启动"
 }
 
+wait_for_health() {
+  local env_file="${WORK_DIR}/.env"
+  local port=""
+  local base_path=""
+  port="$(awk -F= '$1=="SERVER_PORT"{print substr($0, length($1)+2); exit}' "$env_file")"
+  base_path="$(awk -F= '$1=="BASE_PATH"{print substr($0, length($1)+2); exit}' "$env_file")"
+  [[ -n "$port" ]] || die "配置文件缺少 SERVER_PORT"
+
+  local health_url="http://127.0.0.1:${port}${base_path}/api/health"
+  for _ in $(seq 1 30); do
+    if curl -fsS --max-time 2 "$health_url" >/dev/null; then
+      log_success "健康检查通过: $health_url"
+      return 0
+    fi
+    sleep 1
+  done
+  (cd "$WORK_DIR" && $DOCKER_COMPOSE logs --tail=100) || true
+  die "更新后健康检查失败: $health_url"
+}
+
+update_service() {
+  need_cmd docker
+  need_cmd curl
+  prepare_work_dir
+  detect_docker_compose
+  [[ -f "${WORK_DIR}/docker-compose.yml" ]] || die "未找到 ${WORK_DIR}/docker-compose.yml，请先安装"
+  [[ -f "${WORK_DIR}/.env" ]] || die "未找到 ${WORK_DIR}/.env，请先安装"
+  grep -qE '^[[:space:]]+image:' "${WORK_DIR}/docker-compose.yml" \
+    || die "--update 仅支持预构建镜像部署；本地构建请重新运行 BUILD_LOCAL=true install-linux.sh"
+
+  ensure_history_storage
+  install_management_script
+  log_info "拉取最新镜像并重建 ${SERVICE_NAME}..."
+  (cd "$WORK_DIR" && $DOCKER_COMPOSE --env-file .env pull)
+  (cd "$WORK_DIR" && $DOCKER_COMPOSE --env-file .env up -d --force-recreate)
+  connect_to_newapi_network
+  wait_for_health
+  log_success "${SERVICE_NAME} 已更新到最新镜像"
+}
+
 show_result() {
   echo ""
   echo -e "${GREEN}========================================${NC}"
@@ -320,6 +389,7 @@ show_result() {
   echo "  cd ${WORK_DIR} && ${DOCKER_COMPOSE} ps"
   echo "  cd ${WORK_DIR} && ${DOCKER_COMPOSE} logs -f --tail=100"
   echo "  cd ${WORK_DIR} && ${DOCKER_COMPOSE} restart"
+  echo "  bash ${WORK_DIR}/install-linux.sh --update"
   echo ""
 }
 
@@ -387,6 +457,8 @@ install_service() {
   sync_project_files
   write_env_file
   write_compose_file
+  ensure_history_storage
+  install_management_script
   start_service
   show_result
 }
@@ -399,6 +471,7 @@ NewAPI Model Monitor Lite - Linux 一键安装脚本
   install-linux.sh              交互式安装或更新
   install-linux.sh --status     查看容器状态
   install-linux.sh --logs       查看实时日志
+  install-linux.sh --update     拉取最新镜像并保留配置与历史数据
   install-linux.sh --uninstall  停止并卸载本模块
   install-linux.sh --help       显示帮助
 
@@ -415,6 +488,8 @@ NewAPI Model Monitor Lite - Linux 一键安装脚本
   REFRESH_SECONDS=60
   MAX_MODELS=100
   STATUS_TIMEOUT_SECONDS=15
+  HISTORY_REFRESH_SECONDS=60
+  HISTORY_TIMEOUT_SECONDS=300
   MOCK_DATA=false
   NEWAPI_CONTAINER=new-api
 EOF
@@ -431,6 +506,9 @@ main() {
       ;;
     --logs )
       show_logs
+      ;;
+    --update )
+      update_service
       ;;
     --uninstall )
       uninstall_service

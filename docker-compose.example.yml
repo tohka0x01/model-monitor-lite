@@ -16,5 +16,10 @@ services:
       REFRESH_SECONDS: ${REFRESH_SECONDS:-60}
       MAX_MODELS: ${MAX_MODELS:-100}
       STATUS_TIMEOUT_SECONDS: ${STATUS_TIMEOUT_SECONDS:-15}
+      HISTORY_DATA_PATH: ${HISTORY_DATA_PATH:-/data/model-monitor.db}
+      HISTORY_REFRESH_SECONDS: ${HISTORY_REFRESH_SECONDS:-60}
+      HISTORY_TIMEOUT_SECONDS: ${HISTORY_TIMEOUT_SECONDS:-300}
       MOCK_DATA: ${MOCK_DATA:-false}
+    volumes:
+      - ./data:/data
     restart: unless-stopped

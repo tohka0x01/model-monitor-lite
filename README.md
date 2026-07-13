@@ -29,11 +29,16 @@ DEFAULT_WINDOW=24h
 REFRESH_SECONDS=60
 MAX_MODELS=100
 STATUS_TIMEOUT_SECONDS=15
+HISTORY_DATA_PATH=./data/model-monitor.db
+HISTORY_REFRESH_SECONDS=60
+HISTORY_TIMEOUT_SECONDS=300
 MOCK_DATA=false
 ```
 
 `LOG_SQL_DSN` 可选。NewAPI 如果启用了日志分库，应填写日志库连接串；为空时读取 `SQL_DSN` 指向数据库中的 `logs` 表。`BASE_PATH` 可选，例如设置为 `/model-monitor` 后，页面地址就是 `/model-monitor/embed`。
-`MAX_MODELS` 用于限制 `/api/models` 和 `/api/status` 的模型数量，避免一次刷新聚合过多模型；`STATUS_TIMEOUT_SECONDS` 是 `/api/status` 的整体请求超时。
+`MAX_MODELS` 用于限制 `/api/models`、`/api/status` 和 `/api/token-totals` 的模型数量；`STATUS_TIMEOUT_SECONDS` 是状态接口的整体请求超时。
+
+`HISTORY_DATA_PATH` 是历史 Token 累计库。服务首次启动时回填当前仍保留的日志，此后按 `logs.id` 增量累计；累计值和游标在同一个 SQLite 事务中提交。`HISTORY_REFRESH_SECONDS` 控制增量同步间隔，`HISTORY_TIMEOUT_SECONDS` 限制单次同步时间。已在首次同步前删除的日志无法恢复，服务停机时间也应短于 NewAPI 的日志保留周期。
 
 ## 性能建议
 
@@ -80,7 +85,8 @@ CREATE INDEX idx_logs_recent_models ON logs (created_at, type, model_name);
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/api/models` | 最近 24 小时出现过请求的模型 |
 | `GET` | `/api/config` | 前端公开配置 |
-| `POST` | `/api/status` | 批量查询模型状态 |
+| `POST` | `/api/status` | 批量查询模型状态和当前窗口 Token |
+| `POST` | `/api/token-totals` | 查询 SQLite 中持久化的日志累计 Token |
 
 ## NewAPI 菜单接入思路
 
@@ -142,8 +148,11 @@ BUILD_LOCAL=true bash install-linux.sh
 ```bash
 bash install-linux.sh --status
 bash install-linux.sh --logs
+bash install-linux.sh --update
 bash install-linux.sh --uninstall
 ```
+
+`--update` 会保留安装目录中的 `.env` 和 `data/model-monitor.db`，拉取最新镜像、强制重建容器并执行健康检查。安装脚本会复制到安装目录，默认可通过 `bash /opt/newapi-model-monitor-lite/install-linux.sh --update` 执行后续更新。
 
 ## Docker Compose 部署
 
@@ -163,6 +172,9 @@ DEFAULT_WINDOW=24h
 REFRESH_SECONDS=60
 MAX_MODELS=100
 STATUS_TIMEOUT_SECONDS=15
+HISTORY_DATA_PATH=/data/model-monitor.db
+HISTORY_REFRESH_SECONDS=60
+HISTORY_TIMEOUT_SECONDS=300
 MOCK_DATA=false
 EOF
 
@@ -170,7 +182,7 @@ docker compose pull
 docker compose up -d
 ```
 
-其中 `docker-compose.example.yml` 已经把宿主机端口绑定到 `127.0.0.1:1145`，容器内 `SERVER_HOST=0.0.0.0` 用于让 Go 服务在容器网络内正常监听。
+其中 `docker-compose.example.yml` 已经把宿主机端口绑定到 `127.0.0.1:1145`，并把宿主机 `./data` 挂载到容器 `/data`。容器内 `SERVER_HOST=0.0.0.0` 用于正常监听，删除或重建容器不会删除历史累计库；仍应定期备份 `data/model-monitor.db`。
 
 ## Nginx 反代示例
 
