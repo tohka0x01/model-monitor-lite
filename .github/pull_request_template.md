@@ -11,6 +11,7 @@ Closes #
 - [ ] `go vet ./...`
 - [ ] `go build ./...`
 - [ ] `docker build -t model-monitor-lite:verify .`
+- [ ] Maintainer explicitly confirmed local acceptance before push
 
 ## Risk
 
