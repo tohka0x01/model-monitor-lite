@@ -21,25 +21,31 @@ import (
 )
 
 type config struct {
-	SQLDSN         string
-	LogSQLDSN      string
-	ServerHost     string
-	ServerPort     string
-	BasePath       string
-	PublicTitle    string
-	DefaultModels  []string
-	DefaultWindow  string
-	RefreshSeconds int
-	MaxModels      int
-	StatusTimeout  time.Duration
-	MockData       bool
+	SQLDSN          string
+	LogSQLDSN       string
+	ServerHost      string
+	ServerPort      string
+	BasePath        string
+	PublicTitle     string
+	DefaultModels   []string
+	DefaultWindow   string
+	RefreshSeconds  int
+	MaxModels       int
+	StatusTimeout   time.Duration
+	HistoryDataPath string
+	HistoryRefresh  time.Duration
+	HistoryTimeout  time.Duration
+	MockData        bool
 }
 
 type app struct {
-	cfg   config
-	db    *sqlx.DB
-	logDB *sqlx.DB
-	isPG  bool
+	cfg             config
+	db              *sqlx.DB
+	logDB           *sqlx.DB
+	history         *tokenHistory
+	isPG            bool
+	collectorCancel context.CancelFunc
+	collectorDone   chan struct{}
 }
 
 type timeWindowConfig struct {
@@ -65,6 +71,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	app.startHistoryCollector()
 	defer app.close()
 
 	gin.SetMode(gin.ReleaseMode)
@@ -88,18 +95,21 @@ func main() {
 
 func loadConfig() config {
 	return config{
-		SQLDSN:         strings.TrimSpace(os.Getenv("SQL_DSN")),
-		LogSQLDSN:      strings.TrimSpace(os.Getenv("LOG_SQL_DSN")),
-		ServerHost:     envDefault("SERVER_HOST", "0.0.0.0"),
-		ServerPort:     envDefault("SERVER_PORT", "1145"),
-		BasePath:       cleanBasePath(os.Getenv("BASE_PATH")),
-		PublicTitle:    envDefault("PUBLIC_TITLE", "模型状态监控"),
-		DefaultModels:  splitCSV(os.Getenv("DEFAULT_MODELS")),
-		DefaultWindow:  envDefault("DEFAULT_WINDOW", "24h"),
-		RefreshSeconds: envIntDefault("REFRESH_SECONDS", 60),
-		MaxModels:      envPositiveIntDefault("MAX_MODELS", 100),
-		StatusTimeout:  time.Duration(envPositiveIntDefault("STATUS_TIMEOUT_SECONDS", 15)) * time.Second,
-		MockData:       envBoolDefault("MOCK_DATA", false),
+		SQLDSN:          strings.TrimSpace(os.Getenv("SQL_DSN")),
+		LogSQLDSN:       strings.TrimSpace(os.Getenv("LOG_SQL_DSN")),
+		ServerHost:      envDefault("SERVER_HOST", "0.0.0.0"),
+		ServerPort:      envDefault("SERVER_PORT", "1145"),
+		BasePath:        cleanBasePath(os.Getenv("BASE_PATH")),
+		PublicTitle:     envDefault("PUBLIC_TITLE", "模型状态监控"),
+		DefaultModels:   splitCSV(os.Getenv("DEFAULT_MODELS")),
+		DefaultWindow:   envDefault("DEFAULT_WINDOW", "24h"),
+		RefreshSeconds:  envIntDefault("REFRESH_SECONDS", 60),
+		MaxModels:       envPositiveIntDefault("MAX_MODELS", 100),
+		StatusTimeout:   time.Duration(envPositiveIntDefault("STATUS_TIMEOUT_SECONDS", 15)) * time.Second,
+		HistoryDataPath: envDefault("HISTORY_DATA_PATH", "./data/model-monitor.db"),
+		HistoryRefresh:  time.Duration(envPositiveIntDefault("HISTORY_REFRESH_SECONDS", 60)) * time.Second,
+		HistoryTimeout:  time.Duration(envPositiveIntDefault("HISTORY_TIMEOUT_SECONDS", 300)) * time.Second,
+		MockData:        envBoolDefault("MOCK_DATA", false),
 	}
 }
 
@@ -118,13 +128,31 @@ func newApp(cfg config) (*app, error) {
 		var logIsPG bool
 		logDB, logIsPG, err = openDB(cfg.LogSQLDSN)
 		if err != nil {
-			_ = db.Close()
+			if closeErr := db.Close(); closeErr != nil {
+				log.Printf("close application database after log database failure: %v", closeErr)
+			}
 			return nil, fmt.Errorf("open LOG_SQL_DSN: %w", err)
 		}
 		isPG = logIsPG
 	}
 
-	return &app{cfg: cfg, db: db, logDB: logDB, isPG: isPG}, nil
+	history, err := openTokenHistory(cfg.HistoryDataPath, &sqlTokenLogSource{db: logDB, isPG: isPG})
+	if err != nil {
+		closeAppDatabases(db, logDB)
+		return nil, fmt.Errorf("open token history: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.HistoryTimeout)
+	err = history.Collect(ctx)
+	cancel()
+	if err != nil {
+		if closeErr := history.Close(); closeErr != nil {
+			log.Printf("close token history after initialization failure: %v", closeErr)
+		}
+		closeAppDatabases(db, logDB)
+		return nil, fmt.Errorf("initialize token history: %w", err)
+	}
+
+	return &app{cfg: cfg, db: db, logDB: logDB, history: history, isPG: isPG}, nil
 }
 
 func openDB(rawDSN string) (*sqlx.DB, bool, error) {
@@ -140,13 +168,65 @@ func openDB(rawDSN string) (*sqlx.DB, bool, error) {
 	return db, isPG, nil
 }
 
+func closeAppDatabases(db, logDB *sqlx.DB) {
+	if logDB != nil && logDB != db {
+		if err := logDB.Close(); err != nil {
+			log.Printf("close log database: %v", err)
+		}
+	}
+	if db != nil {
+		if err := db.Close(); err != nil {
+			log.Printf("close application database: %v", err)
+		}
+	}
+}
+
+// startHistoryCollector must be called once before the app begins serving requests.
+func (a *app) startHistoryCollector() {
+	if a.history == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.collectorCancel = cancel
+	a.collectorDone = make(chan struct{})
+	go a.runHistoryCollector(ctx)
+}
+
+// runHistoryCollector owns the single background collection loop.
+func (a *app) runHistoryCollector(ctx context.Context) {
+	defer close(a.collectorDone)
+	ticker := time.NewTicker(a.cfg.HistoryRefresh)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.collectHistory(ctx)
+		}
+	}
+}
+
+func (a *app) collectHistory(ctx context.Context) {
+	collectCtx, cancel := context.WithTimeout(ctx, a.cfg.HistoryTimeout)
+	defer cancel()
+	if err := a.history.Collect(collectCtx); err != nil && ctx.Err() == nil {
+		log.Printf("token history collection failed: %v", err)
+	}
+}
+
+// close must be called after the HTTP server stops accepting new work.
 func (a *app) close() {
-	if a.logDB != nil && a.logDB != a.db {
-		_ = a.logDB.Close()
+	if a.collectorCancel != nil {
+		a.collectorCancel()
+		<-a.collectorDone
 	}
-	if a.db != nil {
-		_ = a.db.Close()
+	if a.history != nil {
+		if err := a.history.Close(); err != nil {
+			log.Printf("close token history: %v", err)
+		}
 	}
+	closeAppDatabases(a.db, a.logDB)
 }
 
 func driverForDSN(dsn string) (string, bool) {
@@ -251,6 +331,10 @@ type statusRequest struct {
 	Window string   `json:"window"`
 }
 
+type modelsRequest struct {
+	Models []string `json:"models"`
+}
+
 type slotStatus struct {
 	Slot          int     `json:"slot"`
 	StartTime     int64   `json:"start_time"`
@@ -310,6 +394,7 @@ func (a *app) registerRoutes(r *gin.Engine) {
 		api.GET("/config", a.handleConfig)
 		api.GET("/models", a.handleModels)
 		api.POST("/status", a.handleStatus)
+		api.POST("/token-totals", a.handleTokenTotals)
 	}
 }
 
@@ -355,6 +440,36 @@ func (a *app) handleModels(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": models})
+}
+
+func (a *app) handleTokenTotals(c *gin.Context) {
+	var req modelsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid JSON body"})
+		return
+	}
+	models := a.limitModels(uniqueModels(req.Models))
+	if len(models) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "at least one model is required"})
+		return
+	}
+	if a.cfg.MockData {
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": mockTokenTotals(models), "mock": true})
+		return
+	}
+	if a.history == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "token history is unavailable"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), a.cfg.StatusTimeout)
+	defer cancel()
+	totals, err := a.history.Totals(ctx, models)
+	if err != nil {
+		writeAPIError(c, http.StatusInternalServerError, "failed to load token history", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": totals})
 }
 
 func (a *app) handleStatus(c *gin.Context) {
@@ -639,6 +754,17 @@ func (a *app) limitModels(models []string) []string {
 		return models
 	}
 	return models[:a.cfg.MaxModels]
+}
+
+func mockTokenTotals(models []string) []modelTokenTotal {
+	totals := make([]modelTokenTotal, 0, len(models))
+	for i, model := range models {
+		totals = append(totals, modelTokenTotal{
+			ModelName:      model,
+			RetainedTokens: int64(i+1) * 12_500_000,
+		})
+	}
+	return totals
 }
 
 func mockModelOptions() []modelOption {

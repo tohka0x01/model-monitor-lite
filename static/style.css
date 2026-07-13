@@ -172,6 +172,13 @@ h1 {
   letter-spacing: 0;
 }
 
+.token-wrap {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
 .model-token {
   flex: 0 0 auto;
   border: 1px solid #e2e8f0;
@@ -184,6 +191,12 @@ h1 {
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.model-token.retained-token {
+  border-color: #dbeafe;
+  background: #eff6ff;
+  color: #2563eb;
 }
 
 .metrics {

@@ -1,6 +1,27 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestLoadConfigUsesDurableHistoryDefaults(t *testing.T) {
+	t.Setenv("HISTORY_DATA_PATH", "")
+	t.Setenv("HISTORY_REFRESH_SECONDS", "")
+	t.Setenv("HISTORY_TIMEOUT_SECONDS", "")
+
+	cfg := loadConfig()
+
+	if cfg.HistoryDataPath != "./data/model-monitor.db" {
+		t.Fatalf("HistoryDataPath = %q, want ./data/model-monitor.db", cfg.HistoryDataPath)
+	}
+	if cfg.HistoryRefresh != time.Minute {
+		t.Fatalf("HistoryRefresh = %s, want 1m", cfg.HistoryRefresh)
+	}
+	if cfg.HistoryTimeout != 5*time.Minute {
+		t.Fatalf("HistoryTimeout = %s, want 5m", cfg.HistoryTimeout)
+	}
+}
 
 func TestBuildModelStatusSumsSlotTokens(t *testing.T) {
 	cfg := timeWindowConfig{numSlots: 2, slotSeconds: 60}
