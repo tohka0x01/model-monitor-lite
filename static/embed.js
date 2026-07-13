@@ -8,6 +8,8 @@ const state = {
   timeWindow: '24h',
 }
 
+const TOKEN_UNITS = ['', 'K', 'M', 'B', 'T', 'P', 'E']
+
 const els = {
   title: document.getElementById('page-title'),
   subtitle: document.getElementById('subtitle'),
@@ -112,6 +114,7 @@ function renderRow(item) {
     <div class="model-head">
       <div class="name-wrap">
         <h3 class="model-name" title="${escapeHTML(item.model_name || '')}">${escapeHTML(item.model_name || '')}</h3>
+        <span class="model-token" title="总 Token ${escapeHTML(formatNumber(item.total_tokens || 0))}">Token ${escapeHTML(formatTokens(item.total_tokens))}</span>
       </div>
       <div class="metrics">
         <strong>${escapeHTML(String(item.success_rate ?? 100))}%</strong><span class="sep">·</span>${formatNumber(item.total_requests || 0)}
@@ -135,6 +138,7 @@ function renderSlot(slot) {
     data-start="${escapeHTML(formatTime(slot.start_time))}"
     data-end="${escapeHTML(formatTime(slot.end_time))}"
     data-total="${escapeHTML(String(slot.total_requests || 0))}"
+    data-tokens="${escapeHTML(formatTokens(slot.total_tokens))}"
     data-success="${escapeHTML(String(slot.success_count || 0))}"
     data-rate="${escapeHTML(rateLabel)}"
     data-status="${escapeHTML(statusLabel(cls))}"
@@ -201,6 +205,18 @@ function formatNumber(value) {
   return Number(value || 0).toLocaleString('zh-CN')
 }
 
+function formatTokens(value) {
+  const tokens = Number(value)
+  if (!Number.isFinite(tokens) || tokens <= 0) return '0'
+
+  const unitIndex = Math.min(Math.floor(Math.log10(tokens) / 3), TOKEN_UNITS.length - 1)
+  if (unitIndex === 0) return formatNumber(tokens)
+
+  const scaled = tokens / (1000 ** unitIndex)
+  const fractionDigits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2
+  return `${Number(scaled.toFixed(fractionDigits))}${TOKEN_UNITS[unitIndex]}`
+}
+
 function escapeHTML(value) {
   return String(value).replace(/[&<>'"]/g, char => ({
     '&': '&amp;',
@@ -233,6 +249,7 @@ function handleSlotEnter(event) {
       <span>状态<strong>${escapeHTML(slot.dataset.status)}</strong></span>
       <span>成功率<strong>${escapeHTML(slot.dataset.rate)}</strong></span>
       <span>请求<strong>${escapeHTML(slot.dataset.total)}</strong></span>
+      <span>Token<strong>${escapeHTML(slot.dataset.tokens)}</strong></span>
       <span>成功<strong>${escapeHTML(slot.dataset.success)}</strong></span>
     </div>
   `
