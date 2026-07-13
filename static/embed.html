@@ -11,13 +11,15 @@
     <main class="page">
       <header class="header">
         <div>
-          <h1 id="page-title">模型状态监控</h1>
+          <div class="title-row">
+            <h1 id="page-title">模型状态监控</h1>
+            <button id="refresh-button" class="refresh" type="button" aria-label="刷新">
+              <span class="clock" aria-hidden="true"></span>
+              <span id="countdown">--s</span>
+            </button>
+          </div>
           <p id="subtitle">24小时 · 0 models</p>
         </div>
-        <button id="refresh-button" class="refresh" type="button" aria-label="刷新">
-          <span class="clock" aria-hidden="true"></span>
-          <span id="countdown">--s</span>
-        </button>
       </header>
 
       <section id="models" class="models" aria-live="polite"></section>
