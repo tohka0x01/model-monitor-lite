@@ -46,7 +46,7 @@ button {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 36px;
+  margin-bottom: 66px;
 }
 
 h1 {
@@ -130,12 +130,15 @@ h1 {
 
 .name-wrap {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 10px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .model-name {
+  flex: 0 1 auto;
   margin: 0;
   min-width: 0;
   max-width: 100%;
@@ -158,6 +161,20 @@ h1 {
   font-weight: 650;
   font-variant-ligatures: none;
   letter-spacing: 0;
+}
+
+.model-token {
+  flex: 0 0 auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #64748b;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .metrics {
@@ -218,7 +235,7 @@ h1 {
 
 .slot:hover,
 .slot.active {
-  opacity: 0.9;
+  opacity: 1;
   transform: translateY(-2px) scaleY(1.35);
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14);
   z-index: 2;
@@ -280,13 +297,12 @@ h1 {
   max-width: 240px;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--bg);
   box-shadow: 0 18px 45px rgba(15, 23, 42, 0.16);
   color: var(--ink);
   padding: 10px 11px;
   pointer-events: none;
   transform: translate(-50%, calc(-100% - 12px));
-  backdrop-filter: blur(10px);
 }
 
 .slot-tooltip::after {
@@ -298,7 +314,7 @@ h1 {
   height: 9px;
   border-right: 1px solid #e2e8f0;
   border-bottom: 1px solid #e2e8f0;
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--bg);
   transform: translateX(-50%) rotate(45deg);
 }
 
@@ -342,13 +358,17 @@ h1 {
   }
 
   .header {
-    margin-bottom: 28px;
+    margin-bottom: 58px;
   }
 
   .model-head {
     align-items: flex-start;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .name-wrap {
+    width: 100%;
   }
 
   .metrics {

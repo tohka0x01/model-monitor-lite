@@ -256,6 +256,7 @@ type slotStatus struct {
 	StartTime     int64   `json:"start_time"`
 	EndTime       int64   `json:"end_time"`
 	TotalRequests int64   `json:"total_requests"`
+	TotalTokens   int64   `json:"total_tokens"`
 	SuccessCount  int64   `json:"success_count"`
 	FailureCount  int64   `json:"failure_count"`
 	EmptyCount    int64   `json:"empty_count"`
@@ -268,6 +269,7 @@ type modelStatus struct {
 	DisplayName   string       `json:"display_name"`
 	TimeWindow    string       `json:"time_window"`
 	TotalRequests int64        `json:"total_requests"`
+	TotalTokens   int64        `json:"total_tokens"`
 	SuccessCount  int64        `json:"success_count"`
 	FailureCount  int64        `json:"failure_count"`
 	EmptyCount    int64        `json:"empty_count"`
@@ -277,12 +279,13 @@ type modelStatus struct {
 }
 
 type slotRow struct {
-	ModelName string `db:"model_name"`
-	SlotIdx   int64  `db:"slot_idx"`
-	Total     int64  `db:"total"`
-	Success   int64  `db:"success"`
-	Failure   int64  `db:"failure"`
-	Empty     int64  `db:"empty"`
+	ModelName   string `db:"model_name"`
+	SlotIdx     int64  `db:"slot_idx"`
+	Total       int64  `db:"total"`
+	TotalTokens int64  `db:"total_tokens"`
+	Success     int64  `db:"success"`
+	Failure     int64  `db:"failure"`
+	Empty       int64  `db:"empty"`
 }
 
 func (a *app) registerRoutes(r *gin.Engine) {
@@ -454,6 +457,7 @@ func (a *app) modelStatuses(ctx context.Context, models []string, window string)
 		SELECT model_name,
 			FLOOR((created_at - %d) / %d) as slot_idx,
 			COUNT(*) as total,
+			COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) as total_tokens,
 			SUM(CASE WHEN type = 2 AND completion_tokens > 0 THEN 1 ELSE 0 END) as success,
 			SUM(CASE WHEN type = 5 THEN 1 ELSE 0 END) as failure,
 			SUM(CASE WHEN type = 2 AND completion_tokens = 0 THEN 1 ELSE 0 END) as empty
@@ -493,7 +497,7 @@ func (a *app) modelStatuses(ctx context.Context, models []string, window string)
 
 func buildModelStatus(modelName, window string, cfg timeWindowConfig, startTime int64, bySlot map[int64]slotRow) modelStatus {
 	slots := make([]slotStatus, 0, cfg.numSlots)
-	var totalReqs, totalSuccess, totalFailure, totalEmpty int64
+	var totalReqs, totalTokens, totalSuccess, totalFailure, totalEmpty int64
 	for i := 0; i < cfg.numSlots; i++ {
 		row := bySlot[int64(i)]
 		slotStart := startTime + int64(i)*cfg.slotSeconds
@@ -506,6 +510,7 @@ func buildModelStatus(modelName, window string, cfg timeWindowConfig, startTime 
 			StartTime:     slotStart,
 			EndTime:       slotStart + cfg.slotSeconds,
 			TotalRequests: row.Total,
+			TotalTokens:   row.TotalTokens,
 			SuccessCount:  row.Success,
 			FailureCount:  row.Failure,
 			EmptyCount:    row.Empty,
@@ -513,6 +518,7 @@ func buildModelStatus(modelName, window string, cfg timeWindowConfig, startTime 
 			Status:        statusColor(rate, row.Total),
 		})
 		totalReqs += row.Total
+		totalTokens += row.TotalTokens
 		totalSuccess += row.Success
 		totalFailure += row.Failure
 		totalEmpty += row.Empty
@@ -528,6 +534,7 @@ func buildModelStatus(modelName, window string, cfg timeWindowConfig, startTime 
 		DisplayName:   modelName,
 		TimeWindow:    window,
 		TotalRequests: totalReqs,
+		TotalTokens:   totalTokens,
 		SuccessCount:  totalSuccess,
 		FailureCount:  totalFailure,
 		EmptyCount:    totalEmpty,
@@ -624,11 +631,12 @@ func mockStatuses(models []string, window string) []modelStatus {
 
 	for modelIndex, name := range models {
 		slots := make([]slotStatus, 0, cfg.numSlots)
-		var totalReqs, totalSuccess, totalFailure, totalEmpty int64
+		var totalReqs, totalTokens, totalSuccess, totalFailure, totalEmpty int64
 
 		for i := 0; i < cfg.numSlots; i++ {
 			slotStart := startTime + int64(i)*cfg.slotSeconds
 			total := int64(0)
+			tokens := int64(0)
 			success := int64(0)
 			failure := int64(0)
 			empty := int64(0)
@@ -667,6 +675,7 @@ func mockStatuses(models []string, window string) []modelStatus {
 				}
 				failure = total - success
 				empty = failure / 2
+				tokens = total * int64(8_000+(modelIndex+1)*2_500+i*137)
 			}
 
 			rate := float64(100)
@@ -679,6 +688,7 @@ func mockStatuses(models []string, window string) []modelStatus {
 				StartTime:     slotStart,
 				EndTime:       slotStart + cfg.slotSeconds,
 				TotalRequests: total,
+				TotalTokens:   tokens,
 				SuccessCount:  success,
 				FailureCount:  failure,
 				EmptyCount:    empty,
@@ -687,6 +697,7 @@ func mockStatuses(models []string, window string) []modelStatus {
 			})
 
 			totalReqs += total
+			totalTokens += tokens
 			totalSuccess += success
 			totalFailure += failure
 			totalEmpty += empty
@@ -702,6 +713,7 @@ func mockStatuses(models []string, window string) []modelStatus {
 			DisplayName:   name,
 			TimeWindow:    window,
 			TotalRequests: totalReqs,
+			TotalTokens:   totalTokens,
 			SuccessCount:  totalSuccess,
 			FailureCount:  totalFailure,
 			EmptyCount:    totalEmpty,
