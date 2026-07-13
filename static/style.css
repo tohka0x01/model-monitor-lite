@@ -42,11 +42,20 @@ button {
 }
 
 .header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
   margin-bottom: 66px;
+}
+
+.title-row {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.title-row h1,
+.title-row .refresh {
+  flex: 0 0 auto;
 }
 
 h1 {

@@ -278,9 +278,15 @@ type modelStatus struct {
 	SlotData      []slotStatus `json:"slot_data"`
 }
 
+const (
+	logTypeConsume int64 = 2
+	logTypeError   int64 = 5
+)
+
 type slotRow struct {
 	ModelName   string `db:"model_name"`
 	SlotIdx     int64  `db:"slot_idx"`
+	LogType     int64  `db:"log_type"`
 	Total       int64  `db:"total"`
 	TotalTokens int64  `db:"total_tokens"`
 	Success     int64  `db:"success"`
@@ -456,16 +462,14 @@ func (a *app) modelStatuses(ctx context.Context, models []string, window string)
 	query := fmt.Sprintf(`
 		SELECT model_name,
 			FLOOR((created_at - %d) / %d) as slot_idx,
+			type as log_type,
 			COUNT(*) as total,
-			COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) as total_tokens,
-			SUM(CASE WHEN type = 2 AND completion_tokens > 0 THEN 1 ELSE 0 END) as success,
-			SUM(CASE WHEN type = 5 THEN 1 ELSE 0 END) as failure,
-			SUM(CASE WHEN type = 2 AND completion_tokens = 0 THEN 1 ELSE 0 END) as empty
+			COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) as total_tokens
 		FROM logs
 		WHERE model_name IN (?)
 			AND created_at >= ? AND created_at < ?
 			AND type IN (2, 5)
-		GROUP BY model_name, FLOOR((created_at - %d) / %d)`, startTime, cfg.slotSeconds, startTime, cfg.slotSeconds)
+		GROUP BY model_name, FLOOR((created_at - %d) / %d), type`, startTime, cfg.slotSeconds, startTime, cfg.slotSeconds)
 	query, args, err := sqlx.In(query, models, startTime, now)
 	if err != nil {
 		return nil, err
@@ -485,7 +489,12 @@ func (a *app) modelStatuses(ctx context.Context, models []string, window string)
 		if _, ok := byModel[row.ModelName]; !ok {
 			byModel[row.ModelName] = make(map[int64]slotRow)
 		}
-		byModel[row.ModelName][row.SlotIdx] = row
+		current := byModel[row.ModelName][row.SlotIdx]
+		merged, mergeErr := mergeSlotRow(current, row)
+		if mergeErr != nil {
+			return nil, mergeErr
+		}
+		byModel[row.ModelName][row.SlotIdx] = merged
 	}
 
 	statuses := make([]modelStatus, 0, len(models))
@@ -493,6 +502,22 @@ func (a *app) modelStatuses(ctx context.Context, models []string, window string)
 		statuses = append(statuses, buildModelStatus(modelName, window, cfg, startTime, byModel[modelName]))
 	}
 	return statuses, nil
+}
+
+// mergeSlotRow is safe for concurrent calls because it only mutates value copies.
+func mergeSlotRow(current, row slotRow) (slotRow, error) {
+	current.Total += row.Total
+	current.TotalTokens += row.TotalTokens
+
+	switch row.LogType {
+	case logTypeConsume:
+		current.Success += row.Total
+	case logTypeError:
+		current.Failure += row.Total
+	default:
+		return slotRow{}, fmt.Errorf("unsupported log type %d", row.LogType)
+	}
+	return current, nil
 }
 
 func buildModelStatus(modelName, window string, cfg timeWindowConfig, startTime int64, bySlot map[int64]slotRow) modelStatus {
